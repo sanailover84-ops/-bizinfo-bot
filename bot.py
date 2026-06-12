@@ -69,11 +69,21 @@ def parse_item(item):
         "dept": g("jrsdInsttNm"),
         "exec": g("excInsttNm"),
         "url": g("pblancUrl"),
+        "pblancId": g("pblancId"),
         "hashtags": g("hashtags"),
         "field": g("pldirSportRealmLclasCodeNm"),
         "target": g("trgetNm"),
         "regdate": g("creatPnttm"),
     }
+
+
+def make_link(d):
+    """안정적인 상세페이지 링크 생성"""
+    if d.get("pblancId"):
+        return f"https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId={d['pblancId']}"
+    if d.get("url"):
+        return d["url"] if d["url"].startswith("http") else f"https://www.bizinfo.go.kr{d['url']}"
+    return ""
 
 
 def main():
@@ -111,8 +121,8 @@ def main():
                 msg += f"  🏛 {d['dept']}\n"
             if d['period']:
                 msg += f"  📅 {d['period']}\n"
-            if d['url']:
-                link = d['url'] if d['url'].startswith("http") else f"https://www.bizinfo.go.kr{d['url']}"
+            if d['url'] or d['pblancId']:
+                link = make_link(d)
                 msg += f"  🔗 {link}\n"
             msg += "\n"
         if len(matched) > 12:
@@ -176,8 +186,8 @@ def generate_html(matched, all_data):
         if d['summary']:
             summary = d['summary'][:150] + "..." if len(d['summary']) > 150 else d['summary']
             html += f'<div class="meta">📝 {summary}</div>\n'
-        if d['url']:
-            link = d['url'] if d['url'].startswith("http") else f"https://www.bizinfo.go.kr{d['url']}"
+        if d['url'] or d['pblancId']:
+            link = make_link(d)
             html += f'<a class="link" href="{link}" target="_blank">자세히 보기 →</a>\n'
         html += '</div>\n'
 
