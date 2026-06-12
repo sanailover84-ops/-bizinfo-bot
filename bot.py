@@ -44,14 +44,14 @@ def strip_html(text):
 
 def get_bizinfo():
     items = []
-    for attempt in range(1, 4):  # 최대 3번 재시도
+    for attempt in range(1, 3):  # 최대 2번
         try:
             params = {
                 "crtfcKey": API_KEY,
                 "dataType": "json",
-                "searchCnt": "500",
+                "searchCnt": "100",   # 500 → 100건으로 축소 (최신순)
             }
-            res = requests.get(URL, params=params, timeout=90)
+            res = requests.get(URL, params=params, timeout=25)
             data = res.json()
             items = data.get("jsonArray", [])
             if items:
@@ -59,7 +59,7 @@ def get_bizinfo():
         except Exception as e:
             print(f"API 시도 {attempt} 오류: {e}")
             import time
-            time.sleep(5)
+            time.sleep(3)
     return items
 
 
