@@ -1,221 +1,63 @@
 import requests
 import os
-import re
-from datetime import datetime
+import time
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHAT_IDS = [
-    os.environ["CHAT_ID"],
-    os.environ.get("CHAT_ID_2", ""),
-]
-CHAT_IDS = [c for c in CHAT_IDS if c]
+CHAT_ID = os.environ["CHAT_ID"]
 API_KEY = os.environ["BIZINFO_API_KEY"]
 
 URL = "https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do"
 
-# ✅ 관심 키워드
-KEYWORDS = ["융자", "보증", "기금", "특허", "바우처"]
-
-# ✅ 웹페이지 주소
-WEB_URL = "https://sanailover84-ops.github.io/bizinfo-bot/"
-
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    max_len = 4000
-    chunks = [message[i:i+max_len] for i in range(0, len(message), max_len)]
-    for chat_id in CHAT_IDS:
-        for chunk in chunks:
-            requests.post(url, data={
-                "chat_id": chat_id,
-                "text": chunk,
-                "disable_web_page_preview": True
-            })
-
-
-def strip_html(text):
-    """HTML 태그 제거"""
-    if not text:
-        return ""
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
-    return " ".join(text.split())
-
-
-def get_bizinfo():
-    items = []
-    for attempt in range(1, 3):  # 최대 2번
-        try:
-            params = {
-                "crtfcKey": API_KEY,
-                "dataType": "json",
-                "searchCnt": "100",   # 500 → 100건으로 축소 (최신순)
-            }
-            res = requests.get(URL, params=params, timeout=25)
-            data = res.json()
-            items = data.get("jsonArray", [])
-            if items:
-                return items
-        except Exception as e:
-            print(f"API 시도 {attempt} 오류: {e}")
-            import time
-            time.sleep(3)
-    return items
-
-
-def parse_item(item):
-    def g(key):
-        return str(item.get(key, "")).strip()
-    return {
-        "title": g("pblancNm"),
-        "summary": strip_html(g("bsnsSumryCn")),
-        "period": g("reqstBeginEndDe"),
-        "dept": g("jrsdInsttNm"),
-        "exec": g("excInsttNm"),
-        "url": g("pblancUrl"),
-        "pblancId": g("pblancId"),
-        "hashtags": g("hashtags"),
-        "field": g("pldirSportRealmLclasCodeNm"),
-        "target": g("trgetNm"),
-        "regdate": g("creatPnttm"),
-    }
-
-
-def is_open(period):
-    """신청기간이 안 지났는지 확인. period 예: '2026-06-10 ~ 2026-06-24'"""
-    try:
-        if "~" not in period:
-            return True  # 기간 정보 없으면 일단 포함
-        end_str = period.split("~")[1].strip().replace("-", "").replace(".", "")
-        if len(end_str) < 8:
-            return True
-        today = datetime.now().strftime("%Y%m%d")
-        return end_str >= today
-    except Exception:
-        return True
-
-
-def make_link(d):
-    """상세페이지 링크 생성 (API 원본 URL 우선)"""
-    if d.get("url"):
-        return d["url"] if d["url"].startswith("http") else f"https://www.bizinfo.go.kr{d['url']}"
-    if d.get("pblancId"):
-        return f"https://www.bizinfo.go.kr/sii/siia/selectSIIA200Detail.do?pblancId={d['pblancId']}"
-    return ""
+    requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": message,
+        "disable_web_page_preview": True
+    })
 
 
 def main():
-    today = datetime.now().strftime("%Y년 %m월 %d일 (%A)")
-    day_map = {
-        "Monday": "월요일", "Tuesday": "화요일", "Wednesday": "수요일",
-        "Thursday": "목요일", "Friday": "금요일", "Saturday": "토요일", "Sunday": "일요일"
+    report = "🔬 진단 시작\n\n"
+
+    # 1단계: 키 앞 4자리 확인 (전체 노출 안 함)
+    report += f"1) API_KEY 길이: {len(API_KEY)}자, 앞2자: {API_KEY[:2]}\n\n"
+
+    # 2단계: API 호출 (시간 측정)
+    params = {
+        "crtfcKey": API_KEY,
+        "dataType": "json",
+        "searchCnt": "10",
     }
-    for en, ko in day_map.items():
-        today = today.replace(en, ko)
+    start = time.time()
+    try:
+        res = requests.get(URL, params=params, timeout=25)
+        elapsed = round(time.time() - start, 1)
+        report += f"2) 호출 성공! 소요 {elapsed}초, 상태코드 {res.status_code}\n\n"
 
-    raw_items = get_bizinfo()
-    all_data = [parse_item(it) for it in raw_items]
+        # 3단계: 응답 내용 앞부분
+        report += f"3) 응답 앞 300자:\n{res.text[:300]}\n\n"
 
-    # 키워드 매칭 (공고명 + 요약 + 해시태그) + 신청 마감 안 된 것만
-    matched = []
-    for d in all_data:
-        if not is_open(d['period']):  # 마감된 사업 제외
-            continue
-        search_text = f"{d['title']} {d['summary']} {d['hashtags']}"
-        hit_kw = [kw for kw in KEYWORDS if kw in search_text]
-        if hit_kw:
-            d["matched_kw"] = hit_kw
-            matched.append(d)
+        # 4단계: JSON 파싱 시도
+        try:
+            data = res.json()
+            keys = list(data.keys())
+            report += f"4) JSON 키: {keys}\n"
+            arr = data.get("jsonArray", "키없음")
+            if isinstance(arr, list):
+                report += f"   jsonArray 건수: {len(arr)}\n"
+            else:
+                report += f"   jsonArray: {arr}\n"
+        except Exception as je:
+            report += f"4) JSON 파싱 실패: {str(je)[:100]}\n"
 
-    msg = f"💼 {today} 기업지원사업 브리핑\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    except Exception as e:
+        elapsed = round(time.time() - start, 1)
+        report += f"2) 호출 실패! 소요 {elapsed}초\n오류: {str(e)[:200]}\n"
 
-    if matched:
-        msg += f"🔔 키워드 매칭 ({len(matched)}건)\n"
-        msg += f"융자·보증·기금·특허·바우처\n\n"
-        for d in matched[:12]:
-            kw_tag = "·".join(d["matched_kw"])
-            msg += f"• {d['title']}\n"
-            msg += f"  🏷 {kw_tag}\n"
-            if d['dept']:
-                msg += f"  🏛 {d['dept']}\n"
-            if d['period']:
-                msg += f"  📅 {d['period']}\n"
-            if d['url'] or d['pblancId']:
-                link = make_link(d)
-                msg += f"  🔗 {link}\n"
-            msg += "\n"
-        if len(matched) > 12:
-            msg += f"...외 {len(matched)-12}건 (웹페이지 참고)\n\n"
-    else:
-        msg += "오늘은 신청 가능한 키워드 매칭 지원사업이 없습니다.\n\n"
-
-    msg += "━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"📊 전체 {len(all_data)}건 중 {len(matched)}건 매칭\n\n"
-    msg += f"📋 전체 목록 보기\n{WEB_URL}"
-
-    send_telegram(msg)
-    generate_html(matched, all_data)
-    print(f"✅ 전송 완료 - 전체 {len(all_data)}, 매칭 {len(matched)}")
-
-
-def generate_html(matched, all_data):
-    update_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    html = f"""<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>기업지원사업 모아보기</title>
-<style>
-  * {{ box-sizing:border-box; }}
-  body {{ font-family:-apple-system,'Malgun Gothic',sans-serif; background:#f5f6fa; margin:0; padding:16px; color:#2c3e50; }}
-  h1 {{ text-align:center; font-size:23px; }}
-  .update {{ text-align:center; color:#888; font-size:13px; margin-bottom:8px; }}
-  .summary {{ text-align:center; margin-bottom:20px; }}
-  .summary span {{ display:inline-block; background:#fff; padding:6px 14px; border-radius:20px; margin:4px; font-size:13px; box-shadow:0 1px 3px rgba(0,0,0,0.1); }}
-  .section-title {{ font-size:18px; font-weight:bold; margin:20px 0 12px; padding-bottom:8px; border-bottom:2px solid #e74c3c; }}
-  .item {{ background:#fff; border-radius:10px; padding:14px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,0.06); }}
-  .item-title {{ font-weight:bold; font-size:15px; margin-bottom:6px; }}
-  .kw {{ display:inline-block; background:#e74c3c; color:#fff; font-size:11px; padding:2px 8px; border-radius:10px; margin-right:4px; }}
-  .meta {{ color:#666; font-size:13px; margin:3px 0; }}
-  .link {{ display:inline-block; margin-top:8px; background:#3498db; color:#fff; padding:6px 14px; border-radius:6px; font-size:13px; text-decoration:none; }}
-</style>
-</head>
-<body>
-<h1>💼 기업지원사업 모아보기</h1>
-<div class="update">마지막 업데이트: {update_time}</div>
-<div class="summary">
-  <span>📊 전체 {len(all_data)}건</span>
-  <span>🔔 키워드 매칭 {len(matched)}건</span>
-</div>
-<div class="section-title">🔔 키워드 매칭 (융자·보증·기금·특허·바우처)</div>
-"""
-
-    for d in matched:
-        html += '<div class="item">\n'
-        html += f'<div class="item-title">{d["title"]}</div>\n'
-        for kw in d["matched_kw"]:
-            html += f'<span class="kw">{kw}</span>'
-        html += '<div style="margin-top:6px;"></div>'
-        if d['dept']:
-            html += f'<div class="meta">🏛 {d["dept"]}</div>\n'
-        if d['period']:
-            html += f'<div class="meta">📅 {d["period"]}</div>\n'
-        if d['summary']:
-            summary = d['summary'][:150] + "..." if len(d['summary']) > 150 else d['summary']
-            html += f'<div class="meta">📝 {summary}</div>\n'
-        if d['url'] or d['pblancId']:
-            link = make_link(d)
-            html += f'<a class="link" href="{link}" target="_blank">자세히 보기 →</a>\n'
-        html += '</div>\n'
-
-    html += "</body></html>"
-
-    with open("index.html", "w", encoding="utf-8") as f:
-        f.write(html)
-    print("✅ index.html 생성 완료")
+    send_telegram(report)
+    print(report)
 
 
 if __name__ == "__main__":
