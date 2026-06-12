@@ -29,7 +29,6 @@ def send_telegram(message):
             requests.post(url, data={
                 "chat_id": chat_id,
                 "text": chunk,
-                "parse_mode": "Markdown",
                 "disable_web_page_preview": True
             })
 
@@ -82,12 +81,26 @@ def parse_item(item):
     }
 
 
+def is_open(period):
+    """신청기간이 안 지났는지 확인. period 예: '2026-06-10 ~ 2026-06-24'"""
+    try:
+        if "~" not in period:
+            return True  # 기간 정보 없으면 일단 포함
+        end_str = period.split("~")[1].strip().replace("-", "").replace(".", "")
+        if len(end_str) < 8:
+            return True
+        today = datetime.now().strftime("%Y%m%d")
+        return end_str >= today
+    except Exception:
+        return True
+
+
 def make_link(d):
-    """안정적인 상세페이지 링크 생성"""
-    if d.get("pblancId"):
-        return f"https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId={d['pblancId']}"
+    """상세페이지 링크 생성 (API 원본 URL 우선)"""
     if d.get("url"):
         return d["url"] if d["url"].startswith("http") else f"https://www.bizinfo.go.kr{d['url']}"
+    if d.get("pblancId"):
+        return f"https://www.bizinfo.go.kr/sii/siia/selectSIIA200Detail.do?pblancId={d['pblancId']}"
     return ""
 
 
@@ -103,24 +116,26 @@ def main():
     raw_items = get_bizinfo()
     all_data = [parse_item(it) for it in raw_items]
 
-    # 키워드 매칭 (공고명 + 요약 + 해시태그)
+    # 키워드 매칭 (공고명 + 요약 + 해시태그) + 신청 마감 안 된 것만
     matched = []
     for d in all_data:
+        if not is_open(d['period']):  # 마감된 사업 제외
+            continue
         search_text = f"{d['title']} {d['summary']} {d['hashtags']}"
         hit_kw = [kw for kw in KEYWORDS if kw in search_text]
         if hit_kw:
             d["matched_kw"] = hit_kw
             matched.append(d)
 
-    msg = f"💼 *{today} 기업지원사업 브리핑*\n"
+    msg = f"💼 {today} 기업지원사업 브리핑\n"
     msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
 
     if matched:
-        msg += f"🔔 *키워드 매칭 ({len(matched)}건)*\n"
-        msg += f"_융자·보증·기금·특허·바우처_\n\n"
+        msg += f"🔔 키워드 매칭 ({len(matched)}건)\n"
+        msg += f"융자·보증·기금·특허·바우처\n\n"
         for d in matched[:12]:
             kw_tag = "·".join(d["matched_kw"])
-            msg += f"• *{d['title']}*\n"
+            msg += f"• {d['title']}\n"
             msg += f"  🏷 {kw_tag}\n"
             if d['dept']:
                 msg += f"  🏛 {d['dept']}\n"
@@ -133,11 +148,11 @@ def main():
         if len(matched) > 12:
             msg += f"...외 {len(matched)-12}건 (웹페이지 참고)\n\n"
     else:
-        msg += "오늘은 키워드 매칭 지원사업이 없습니다.\n\n"
+        msg += "오늘은 신청 가능한 키워드 매칭 지원사업이 없습니다.\n\n"
 
     msg += "━━━━━━━━━━━━━━━━━━━━\n"
     msg += f"📊 전체 {len(all_data)}건 중 {len(matched)}건 매칭\n\n"
-    msg += f"📋 *전체 목록 보기*\n{WEB_URL}"
+    msg += f"📋 전체 목록 보기\n{WEB_URL}"
 
     send_telegram(msg)
     generate_html(matched, all_data)
